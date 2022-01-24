@@ -1,8 +1,8 @@
-﻿using System;
+using System;
 using System.Runtime.InteropServices;
 using System.Threading;
 
-namespace Baku.VMagicMirrorConfig
+namespace Baku.VMagicMirror
 {
     /// <summary>
     /// 何かのアクションを実行したあとメッセージループで待機できるスレッド
@@ -13,17 +13,10 @@ namespace Baku.VMagicMirrorConfig
 
         private Action _actStart = () => { };
         private Action _actEnd = () => { };
+        private Thread _thread = null;
 
-        private Thread? _thread = null;
-
-        private readonly object _threadIdLock = new object();
-        private uint _threadId = 0;
-        private uint ThreadId
-        {
-            get { lock (_threadIdLock) return _threadId; }
-            set { lock (_threadIdLock) _threadId = value; }
-        }
-
+        private readonly Atomic<uint> _threadId = new Atomic<uint>();
+        
         public void Run(Action actStart, Action actEnd)
         {
             if (_thread != null)
@@ -41,15 +34,16 @@ namespace Baku.VMagicMirrorConfig
         public void Stop()
         {
             _cts.Cancel();
-            WinApi.PostThreadMessage(ThreadId, WinApi.WM_QUIT, IntPtr.Zero, IntPtr.Zero);
+            //メッセージは何でもよい、Tokenがキャンセルされるので
+            WinApi.PostThreadMessage(_threadId.Value, WinApi.WM_QUIT, IntPtr.Zero, IntPtr.Zero);
             _thread = null;
-            ThreadId = 0;
+            _threadId.Value = 0;
         }
 
         private void ThreadWithMessageLoop(CancellationToken token)
         {
             _actStart();
-            ThreadId = WinApi.GetCurrentThreadId();
+            _threadId.Value = WinApi.GetCurrentThreadId();
 
             //NOTE: msgPtrにちゃんと領域確保しておかないとGetMessageがキレるので注意
             var msgPtr = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(WinApi.MSG)));
@@ -71,17 +65,16 @@ namespace Baku.VMagicMirrorConfig
                     WinApi.DispatchMessage(msgPtr);
                 }
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex) when (!(ex is OperationCanceledException))
             {
                 LogOutput.Instance.Write(ex);
             }
             finally
             {
                 Marshal.FreeHGlobal(msgPtr);
-                msgPtr = IntPtr.Zero;
             }
 
-            ThreadId = 0;
+            _threadId.Value = 0;
             _actEnd();
         }
 
